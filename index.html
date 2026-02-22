@@ -1,0 +1,259 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Time Capsule (Prototype)</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>
+    body {
+      font-family: Arial, Helvetica, sans-serif;
+      margin: 18px;
+      max-width: 900px;
+      background: linear-gradient(to bottom right, #4e54c8, #8f94fb);
+      color: white;
+    }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .card {
+      background: rgba(255,255,255,0.1);
+      padding: 16px;
+      border-radius: 12px;
+      margin-top: 14px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    }
+    input, button {
+      padding: 10px;
+      margin: 8px 0;
+      width: 100%;
+      border-radius: 6px;
+      border: none;
+    }
+    input {
+      background: rgba(255,255,255,0.9);
+    }
+    button {
+      background: #ff9800;
+      color: white;
+      font-weight: bold;
+      cursor: pointer;
+    }
+    button:hover {
+      background: #e68900;
+    }
+    .row {
+      display: flex;
+      gap: 8px;
+    }
+    .capsule {
+      border-bottom: 1px solid rgba(255,255,255,0.2);
+      padding: 8px 0;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h2>Time Capsule â€” Prototype</h2>
+    <div id="authArea">
+      <span id="userEmail"></span>
+      <button id="signOutBtn" style="display:none">Sign out</button>
+    </div>
+  </header>
+
+  <div id="authForms" class="card">
+    <h3>Sign up / Log in</h3>
+    <input id="email" placeholder="Email" />
+    <input id="password" placeholder="Password" type="password" />
+    <div class="row">
+      <button id="signupBtn">Sign up</button>
+      <button id="loginBtn">Login</button>
+    </div>
+    <small>Use any email â€” for prototype we use Firebase Auth</small>
+  </div>
+
+  <div id="uploadCard" class="card" style="display:none">
+    <h3>Upload Capsule</h3>
+    <input id="fileInput" type="file"/>
+    <input id="title" placeholder="Title (optional)" />
+    <label>Release date:</label>
+    <input id="releaseDate" type="date" />
+    <input id="encPass" type="password" placeholder="Encryption password (remember this!)" />
+    <button id="uploadBtn">Encrypt & Upload</button>
+    <div id="uploadStatus"></div>
+  </div>
+
+  <div id="dashboard" class="card" style="display:none">
+    <h3>Your Capsules</h3>
+    <div id="capsuleList">Loading...</div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-auth.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-firestore.js"></script>
+
+  <script>
+  
+  var firebaseConfig = {
+  apiKey: "AIzaSyDDQHpIzMHHTns4QH9ue3yTybuHuPOHheg",
+  authDomain: "timecapsule-1bdba.firebaseapp.com",
+  projectId: "timecapsule-1bdba",
+  storageBucket: "timecapsule-1bdba.firebasestorage.app",
+  messagingSenderId: "520584201964",
+  appId: "1:520584201964:web:a1eaee60ab6cf8a0d987c9"
+  };
+  
+  firebase.initializeApp(firebaseConfig);
+  const auth = firebase.auth();
+  const db = firebase.firestore();
+
+  // UI references
+  const emailI = document.getElementById('email');
+  const passI = document.getElementById('password');
+  const signupBtn = document.getElementById('signupBtn');
+  const loginBtn = document.getElementById('loginBtn');
+  const signOutBtn = document.getElementById('signOutBtn');
+  const userEmailSpan = document.getElementById('userEmail');
+  const uploadCard = document.getElementById('uploadCard');
+  const dashboard = document.getElementById('dashboard');
+  const authForms = document.getElementById('authForms');
+  const fileInput = document.getElementById('fileInput');
+  const titleI = document.getElementById('title');
+  const releaseI = document.getElementById('releaseDate');
+  const encPassI = document.getElementById('encPass');
+  const uploadBtn = document.getElementById('uploadBtn');
+  const uploadStatus = document.getElementById('uploadStatus');
+  const capsuleList = document.getElementById('capsuleList');
+
+  // Auth handlers
+  signupBtn.onclick = async () => {
+    try {
+      await auth.createUserWithEmailAndPassword(emailI.value, passI.value);
+    } catch (e) { alert('Signup error: '+e.message) }
+  };
+  loginBtn.onclick = async () => {
+    try {
+      await auth.signInWithEmailAndPassword(emailI.value, passI.value);
+    } catch (e) { alert('Login error: '+e.message) }
+  };
+  signOutBtn.onclick = () => auth.signOut();
+
+  auth.onAuthStateChanged(user => {
+    if (user) {
+      userEmailSpan.innerText = user.email;
+      signOutBtn.style.display = 'inline-block';
+      authForms.style.display = 'none';
+      uploadCard.style.display = 'block';
+      dashboard.style.display = 'block';
+      loadCapsules();
+    } else {
+      userEmailSpan.innerText = '';
+      signOutBtn.style.display = 'none';
+      authForms.style.display = 'block';
+      uploadCard.style.display = 'none';
+      dashboard.style.display = 'none';
+      capsuleList.innerHTML = '';
+    }
+  });
+
+  uploadBtn.onclick = async () => {
+    const f = fileInput.files[0];
+    const pass = encPassI.value;
+    const title = titleI.value || (f?f.name:'Untitled');
+    const releaseDate = releaseI.value;
+    if (!f) return alert('Choose a file');
+    if (!pass) return alert('Enter encryption password (remember it)');
+    if (!releaseDate) return alert('Pick a release date');
+
+    uploadStatus.innerText = 'Reading file...';
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      try {
+        const dataURL = e.target.result;
+        const hash = CryptoJS.SHA256(dataURL).toString();
+        uploadStatus.innerText = 'Encrypting...';
+        const ciphertext = CryptoJS.AES.encrypt(dataURL, pass).toString();
+
+        const user = auth.currentUser;
+        uploadStatus.innerText = 'Saving capsule in database...';
+
+        await db.collection('capsules').add({
+          ownerUid: user.uid,
+          title: title,
+          originalName: f.name,
+          data: ciphertext,
+          hash: hash,
+          releaseDate: firebase.firestore.Timestamp.fromDate(new Date(releaseDate)),
+          createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+
+        uploadStatus.innerText = 'Upload successful!';
+        fileInput.value = '';
+        encPassI.value = '';
+        titleI.value = '';
+        releaseI.value = '';
+        loadCapsules();
+      } catch (err) {
+        uploadStatus.innerText = 'Error: ' + err.message;
+        console.error(err);
+      }
+    };
+    reader.readAsDataURL(f);
+  };
+
+
+  async function loadCapsules() {
+    capsuleList.innerHTML = 'Loading...';
+    const user = auth.currentUser;
+    if (!user) { capsuleList.innerHTML = 'Sign in to see capsules'; return; }
+    const q = await db.collection('capsules').where('ownerUid','==',user.uid).orderBy('releaseDate','desc').get();
+    if (q.empty) { capsuleList.innerHTML = '<p>No capsules yet â€” upload one.</p>'; return; }
+    capsuleList.innerHTML = '';
+    q.forEach(doc => {
+      const d = doc.data();
+      const rdt = d.releaseDate ? d.releaseDate.toDate() : null;
+      const locked = rdt && (new Date() < rdt);
+      const el = document.createElement('div');
+      el.className = 'capsule';
+      el.innerHTML = `<strong>${d.title}</strong> â€” ${d.originalName}<br>
+        Release: ${rdt? rdt.toDateString() : 'â€”'} â€” ${locked? 'ðŸ”’ Locked' : 'ðŸ”“ Unlocked'}<br>
+        <button data-id="${doc.id}">Open</button>`;
+      capsuleList.appendChild(el);
+      el.querySelector('button').onclick = () => openCapsule(doc.id, d);
+    });
+  }
+
+    
+  async function openCapsule(docId, meta) {
+    const rdt = meta.releaseDate ? meta.releaseDate.toDate() : null;
+    if (rdt && (new Date() < rdt)) {
+      return alert('Locked until ' + rdt.toDateString());
+    }
+    const password = prompt('Enter encryption password to decrypt this capsule:');
+    if (!password) return;
+    try {
+      const bytes = CryptoJS.AES.decrypt(meta.data, password);
+      const dataURL = bytes.toString(CryptoJS.enc.Utf8);
+      if (!dataURL) return alert('Wrong password or corrupted data');
+
+      if (dataURL.startsWith('data:image')) {
+        const win = window.open('', '_blank');
+        win.document.write(`<img src="${dataURL}" style="max-width:100%;height:auto">`);
+      } else {
+        const a = document.createElement('a');
+        a.href = dataURL;
+        a.download = meta.originalName || 'download';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Failed to open capsule: ' + (err.message || err));
+    }
+  }
+  </script>
+</body>
+</html>
